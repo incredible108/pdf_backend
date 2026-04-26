@@ -58,10 +58,10 @@ async def scrape_qwen(prompt: str) -> str:
             page = await context.new_page()
             
             # 🎯 KEY FIX: Use domcontentloaded + manual UI wait instead of networkidle
-            await page.goto("https://chat.qwen.ai", wait_until="domcontentloaded", timeout=20000)
+            await page.goto("https://chat.qwen.ai", wait_until="domcontentloaded", timeout=30000)
             
             # Wait for DOM to be interactive, then wait for specific chat element
-            await page.wait_for_timeout(2000)  # Let JS frameworks initialize
+            await page.wait_for_timeout(10000)  # Let JS frameworks initialize
             
             # Verify login state
             if "login" in page.url.lower() or "auth" in page.url.lower():
@@ -69,10 +69,10 @@ async def scrape_qwen(prompt: str) -> str:
             
             # Find input textarea - adjust selector if UI changes
             textarea = page.locator("textarea[placeholder*='message'], textarea[aria-label*='message'], textarea").first
-            await textarea.wait_for(state="visible", timeout=10000)
+            await textarea.wait_for(state="visible", timeout=20000)
             await textarea.fill(prompt)
             
-            await page.wait_for_timeout(2000) 
+            await page.wait_for_timeout(10000) 
             # Find and click send button
             send_btn = page.locator("button.send-button").first
             await send_btn.click()
