@@ -78,7 +78,7 @@ async def scrape_qwen(prompt: str, max_retries: int = 2) -> str:
                 await textarea.scroll_into_view_if_needed()
                 await page.wait_for_timeout(300)
                 await textarea.fill(prompt)
-                
+                await page.wait_for_timeout(3000)
                 # Send message with fallback strategies
                 send_clicked = False
                 send_selectors = [
