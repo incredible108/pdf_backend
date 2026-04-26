@@ -69,79 +69,38 @@ async def scrape_qwen(prompt: str, max_retries: int = 2) -> str:
                 if "login" in page.url.lower() or "auth" in page.url.lower():
                     raise Exception("AUTH_EXPIRED: Please regenerate QWEN_AUTH_STATE")
                 
-                # Wait for the actual chat input to be ready (more reliable than generic selectors)
-                textarea = page.locator("textarea.message-input-textarea").first
-                await textarea.wait_for(state="attached", timeout=15000)
+                # Find input textarea - adjust selector if UI changes
+                textarea = page.locator("textarea[placeholder*='message'], textarea[aria-label*='message'], textarea").first
                 await textarea.wait_for(state="visible", timeout=10000)
-                
-                # Ensure element is truly interactable
-                await textarea.scroll_into_view_if_needed()
-                await page.wait_for_timeout(300)
                 await textarea.fill(prompt)
-                await page.wait_for_timeout(3000)
-                # Send message with fallback strategies
-                send_clicked = False
-                send_selectors = [
-                    "button.send-button",
-                    "button[class*='send']",
-                    "button[aria-label*='send']",
-                    "button:has-text('Send')",
-                    ".message-input-area button:last-child"
-                ]
-                for sel in send_selectors:
-                    btn = page.locator(sel).first
-                    if await btn.is_visible() and await btn.is_enabled():
-                        await btn.click()
-                        send_clicked = True
-                        break
-                if not send_clicked:
-                    await textarea.press("Enter")
+                
+                await page.wait_for_timeout(2000) 
+                # Find and click send button
+                send_btn = page.locator("button.send-button").first
+                await send_btn.click()
                 
                 # Wait for response container to appear
-                response_container = None
-                resp_selectors = [
-                    ".response-message-content",
-                    "[class*='response']",
-                    ".message-bubble.assistant",
-                    "[data-testid='assistant-message']"
-                ]
-                for sel in resp_selectors:
-                    candidate = page.locator(sel).first
-                    try:
-                        await candidate.wait_for(state="visible", timeout=20000)
-                        response_container = candidate
-                        break
-                    except Exception:
-                        continue
+                response_container = page.locator(".response-message-content").first
+                await response_container.wait_for(state="visible", timeout=600000)
                 
-                if not response_container:
-                    response_container = page.locator("body").first
-                    await page.wait_for_timeout(15000)
-                
-                # Poll for stable response (ignore streaming artifacts)
                 last_text = ""
                 stable_count = 0
-                for _ in range(20):  # ~40 seconds max
+                for _ in range(40):  # ~80 seconds max
                     await asyncio.sleep(2)
                     current_text = await response_container.inner_text()
-                    
-                    # Skip loading states
-                    if not current_text or "thinking" in current_text.lower() or current_text.rstrip().endswith("..."):
-                        continue
-                    
-                    if len(current_text) > 30 and current_text == last_text:
+                    if current_text and current_text == last_text:
                         stable_count += 1
-                        if stable_count >= 2:
+                        if stable_count >= 2:  # Stable for ~4 seconds
                             break
                     else:
                         stable_count = 0
                         last_text = current_text
                 
                 result = last_text.strip()
-                if not result or len(result) < 15:
-                    raise Exception(f"Empty/invalid response: '{result[:100]}'")
+                print("[Qwen Response]:", result)
+                if not result:
+                    raise Exception("Empty response from Qwen chat")
                 
-                await browser.close()
                 return result
                 
         except Exception as e:
