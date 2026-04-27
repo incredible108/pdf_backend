@@ -72,7 +72,7 @@ async def scrape_qwen(prompt: str) -> str:
             await textarea.wait_for(state="visible", timeout=20000)
             await textarea.fill(prompt)
             
-            await page.wait_for_timeout(10000) 
+            await page.wait_for_timeout(3000) 
             # Find and click send button
             send_btn = page.locator("button.send-button").first
             await send_btn.click()
