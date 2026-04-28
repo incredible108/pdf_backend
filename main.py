@@ -36,7 +36,7 @@ async def scrape_deepseek(prompt: str) -> str:
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
-                headless=False,
+                headless=True,
                 args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
             )
             context = await browser.new_context(
@@ -120,4 +120,4 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 11000))
-    uvicorn.run("main:app", host="127.0.0.1", port=port, reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
