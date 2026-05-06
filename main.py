@@ -92,6 +92,7 @@ async def scrape_deepseek(prompt: str) -> str:
 @app.post("/scrape-deepseek")
 async def scrape_with_prompt(req: PromptRequest):
     try:
+        print(f"Received prompt: {req.prompt[:10]}...")
         tailored = await asyncio.wait_for(scrape_deepseek(req.prompt), timeout=600.0)
         tailored = re.sub(r'^```(?:text)?\s*', '', tailored, flags=re.MULTILINE)
         tailored = re.sub(r'\s*```$', '', tailored, flags=re.MULTILINE)
