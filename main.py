@@ -1,10 +1,69 @@
-import os, re, asyncio, json, base64, time
+import os, re, asyncio, json, time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
+from contextlib import asynccontextmanager
+import threading
 
-app = FastAPI()
+# Thread-safe slot manager for auth states
+class AuthSlotManager:
+    def __init__(self, num_slots: int = 19):
+        self.num_slots = num_slots
+        self.slots = [False] * (num_slots + 1)  # Index 1-19 (0 unused)
+        self.lock = threading.Lock()
+        self.condition = threading.Condition(self.lock)
+    
+    def acquire_slot(self, timeout: float = 60.0) -> int:
+        """Thread-safe slot acquisition with timeout. Returns slot number or raises."""
+        with self.condition:
+            end_time = time.time() + timeout
+            while True:
+                # Try to find an available slot
+                for i in range(1, self.num_slots + 1):
+                    if not self.slots[i]:
+                        self.slots[i] = True
+                        print(f"[SlotManager] Acquired slot {i}")
+                        return i
+                
+                # No slot available, wait
+                remaining = end_time - time.time()
+                if remaining <= 0:
+                    raise Exception("NO_SLOTS_AVAILABLE: All auth slots are busy, try again later")
+                
+                print(f"[SlotManager] All slots busy, waiting up to {remaining:.1f}s...")
+                self.condition.wait(timeout=min(remaining, 5.0))
+    
+    def release_slot(self, slot_number: int):
+        """Thread-safe slot release."""
+        with self.condition:
+            if 1 <= slot_number <= self.num_slots:
+                self.slots[slot_number] = False
+                print(f"[SlotManager] Released slot {slot_number}")
+                self.condition.notify_all()
+    
+    def get_status(self) -> dict:
+        """Get current slot usage status."""
+        with self.lock:
+            used = sum(1 for i in range(1, self.num_slots + 1) if self.slots[i])
+            return {
+                "total_slots": self.num_slots,
+                "used_slots": used,
+                "available_slots": self.num_slots - used
+            }
+
+# Global slot manager
+slot_manager = AuthSlotManager(num_slots=19)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    print("[Startup] DeepSeek scraper initialized with 19 auth slots")
+    yield
+    # Shutdown
+    print("[Shutdown] DeepSeek scraper shutting down")
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,25 +73,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-STORAGE_STATE = "deepseek_auth.json"
-
 class PromptRequest(BaseModel):
     prompt: str
 
-def load_auth_state():
-    """Load Playwright auth state from Render env var or local fallback."""
-    if os.path.exists(STORAGE_STATE):
-        with open(STORAGE_STATE, "r") as f:
+def load_auth_state(storage_state: str):
+    """Load Playwright auth state from file."""
+    if os.path.exists(storage_state):
+        with open(storage_state, "r") as f:
             return json.load(f)
     
-    print("No local auth state file found. Checking environment variable...")
+    print(f"No auth state file found: {storage_state}")
     return None
 
 async def scrape_deepseek(prompt: str) -> str:
-    auth_state = load_auth_state()
-    if not auth_state:
-        raise Exception("AUTH_MISSING: Set DEEKSEEK_AUTH_STATE env var")
+    # Acquire a slot (thread-safe with timeout)
+    slot_number = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: slot_manager.acquire_slot(timeout=120.0)
+    )
+    
+    STORAGE_STATE = f"auth/deepseek_auth_{slot_number}.json"
+    print(f"-------------------------------- Using auth state file: {STORAGE_STATE} --------------------------------")
 
+    auth_state = load_auth_state(STORAGE_STATE)
+    if not auth_state:
+        slot_manager.release_slot(slot_number)
+        raise Exception(f"AUTH_MISSING: Auth file not found for slot {slot_number}")
+
+    browser = None
     try:
         async with async_playwright() as p:
             browser = await p.chromium.launch(
@@ -79,14 +146,16 @@ async def scrape_deepseek(prompt: str) -> str:
                     stable_count = 0
                     last_text = current_text
             result = last_text.strip()
-            print("[DeepSeek Response]:", result)
+            print("[DeepSeek Response]:", result[:200] if result else "EMPTY")
             if not result:
                 raise Exception("Empty response from DeepSeek chat")
             return result
     except Exception as e:
         raise e
     finally:
-        await browser.close()
+        slot_manager.release_slot(slot_number)
+        if browser:
+            await browser.close()
 
 # DeepSeek endpoint
 @app.post("/scrape-deepseek")
@@ -113,10 +182,27 @@ async def scrape_with_prompt(req: PromptRequest):
 # Health check for DeepSeek
 @app.get("/health")
 async def health_check():
-    auth = load_auth_state()
-    if not auth:
-        return {"status": "unhealthy", "reason": "DEEPSEEK_AUTH_STATE not configured"}
-    return {"status": "healthy", "service": "deepseek-scraper", "timestamp": int(time.time())}
+    # Check if at least one auth file exists
+    auth_exists = any(
+        os.path.exists(f"auth/deepseek_auth_{i}.json") 
+        for i in range(1, 20)
+    )
+    if not auth_exists:
+        return {"status": "unhealthy", "reason": "No DEEPSEEK_AUTH_STATE files configured"}
+    
+    slot_status = slot_manager.get_status()
+    return {
+        "status": "healthy", 
+        "service": "deepseek-scraper", 
+        "timestamp": int(time.time()),
+        **slot_status
+    }
+
+# Slot status endpoint
+@app.get("/slots")
+async def get_slots():
+    """Get current slot usage status."""
+    return slot_manager.get_status()
 
 if __name__ == "__main__":
     import uvicorn
