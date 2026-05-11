@@ -1,0 +1,3 @@
+python Scrapper.py
+
+curl -X POST http://localhost:11000/scrape-deepseek -H "Content-Type: application/json" -d "{\"prompt\": \"Hello, DeepSeek!\"}"
